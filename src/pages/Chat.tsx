@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatComposer } from '../components/chat/ChatComposer'
 import { ChatMessage } from '../components/chat/ChatMessage'
-import { streamChat } from '../services/chatApi'
+import { RESPONSE_TRUNCATED_MARKER, streamChat } from '../services/chatApi'
 import { useSearchParams } from 'react-router-dom'
 
-type Message = { id: string; role: 'user' | 'assistant'; content: string }
+type Message = { id: string; role: 'user' | 'assistant'; content: string; truncated?: boolean }
 
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const suggestions = [
@@ -53,14 +53,43 @@ function ChatPage() {
     const controller = new AbortController()
     abortController.current = controller
     let receivedContent = false
+    let truncated = false
+    let markerCarry = ''
+    const appendAssistantText = (content: string) => {
+      if (!content) return
+      receivedContent = true
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + content } : message))
+    }
+    const markTruncated = () => {
+      truncated = true
+      receivedContent = true
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, truncated: true } : message))
+    }
+    const handleStreamChunk = (chunk: string) => {
+      if (truncated || !chunk) return
+      const combined = markerCarry + chunk
+      const markerIndex = combined.indexOf(RESPONSE_TRUNCATED_MARKER)
+      if (markerIndex >= 0) {
+        appendAssistantText(combined.slice(0, markerIndex))
+        markerCarry = ''
+        markTruncated()
+        return
+      }
+
+      let carryLength = Math.min(combined.length, RESPONSE_TRUNCATED_MARKER.length - 1)
+      while (carryLength > 0 && !RESPONSE_TRUNCATED_MARKER.startsWith(combined.slice(-carryLength))) carryLength -= 1
+      appendAssistantText(combined.slice(0, combined.length - carryLength))
+      markerCarry = combined.slice(combined.length - carryLength)
+    }
+
     try {
-      await streamChat(text, (chunk) => {
-        if (!chunk) return
-        receivedContent = true
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + chunk } : message))
-      }, controller.signal)
+      await streamChat(text, handleStreamChunk, controller.signal)
+      if (!truncated) appendAssistantText(markerCarry)
+      markerCarry = ''
       if (!receivedContent) setError('The assistant returned an empty response. Please try again.')
     } catch (caught) {
+      if (!truncated) appendAssistantText(markerCarry)
+      markerCarry = ''
       const wasCancelled = caught instanceof DOMException && caught.name === 'AbortError'
       if (!receivedContent) setMessages((current) => current.filter((message) => message.id !== assistantId))
       if (!wasCancelled) {
@@ -86,7 +115,7 @@ function ChatPage() {
         <div className="mx-auto mt-9 grid w-full max-w-[550px] grid-cols-1 gap-2.5 text-left min-[391px]:grid-cols-2">
           {suggestions.map((item) => <button key={item.title} className={`${suggestionClass} min-[391px]:min-h-[86px] max-[390px]:min-h-[70px] max-[390px]:justify-center max-[390px]:pl-[49px]`} onClick={() => void sendMessage(item.title)} disabled={busy}><span className="mb-2 grid size-[27px] place-items-center rounded-[7px] bg-[#edf4ef] text-[15px] text-[#4f7d62] max-[390px]:absolute max-[390px]:left-3 max-[390px]:top-[21px] max-[390px]:mb-0">{item.icon}</span><span className="text-[11px] font-semibold text-[#43534a]">{item.title}</span><span className="mt-0.5 text-[10px] text-[#9aa49e] max-[390px]:text-[9px]">{item.description}</span><span className="absolute right-3.5 top-3.5 text-xs text-[#b6c1b9]">↗</span></button>)}
         </div>
-      </div> : <div className="mx-auto w-[calc(100%_-_2rem)] max-w-[690px] py-6 md:w-[calc(100%_-_3rem)] md:pt-[43px]">{messages.map((message) => <ChatMessage key={message.id} role={message.role} content={message.content} streaming={busy && message.role === 'assistant' && !message.content} />)}<div ref={endRef} /></div>}
+      </div> : <div className="mx-auto w-[calc(100%_-_2rem)] max-w-[690px] py-6 md:w-[calc(100%_-_3rem)] md:pt-[43px]">{messages.map((message) => <ChatMessage key={message.id} role={message.role} content={message.content} streaming={busy && message.role === 'assistant' && !message.content && !message.truncated} truncated={message.truncated} />)}<div ref={endRef} /></div>}
       {error && <div className="fixed bottom-28 right-6 z-30 flex max-w-[min(520px,calc(100%_-_2rem))] items-center gap-4 rounded-lg border border-[#f2d0c7] bg-[#fff8f5] px-3.5 py-3 text-xs text-[#874a3c] shadow-lg" role="alert"><span>{error}</span><button className="text-lg text-[#966457]" onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
     </section>
     <ChatComposer value={input} busy={busy} onChange={setInput} onSubmit={submitInput} onStop={stopResponse} />

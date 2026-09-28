@@ -26,7 +26,7 @@ The Vite development server proxies `/api/*` to `http://localhost:8000` by defau
 { "message": "Hello" }
 ```
 
-The response should stream either plain text (`text/plain`) or Server-Sent Events (`text/event-stream`). For SSE, each event's `data` may be plain text or JSON with a `delta`, `token`, `content`, or `text` field. OpenAI-style `choices[0].delta.content` is also supported. The client checks HTTP status codes and displays failures in the chat UI.
+The response may be a JSON object with a string `message` field, plain text (`text/plain`), or Server-Sent Events (`text/event-stream`). JSON responses are displayed after the request completes; text and SSE responses are rendered as they stream in. For SSE, each event's `data` may be plain text or JSON with a `delta`, `token`, `content`, `text`, or `message` field. OpenAI-style `choices[0].delta.content` is also supported. The plain-text stream may emit `\n[RESPONSE_TRUNCATED]` when the model reaches its output-token limit; the UI removes the marker and shows a response-limit notice. The client checks HTTP status codes and displays failures in the chat UI.
 
 `GET /api/health` should return a successful HTTP status while the backend is healthy. The frontend checks it on startup and every 30 seconds while the page is visible.
 

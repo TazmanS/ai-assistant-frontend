@@ -1,5 +1,7 @@
 export type HealthStatus = 'checking' | 'online' | 'offline'
 
+export const RESPONSE_TRUNCATED_MARKER = '\n[RESPONSE_TRUNCATED]'
+
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 function endpoint(path: string) {
@@ -33,7 +35,7 @@ function getTextFromSseData(data: string): string {
     if (typeof value === 'string') return value
     if (value && typeof value === 'object') {
       const record = value as Record<string, unknown>
-      for (const key of ['delta', 'token', 'content', 'text']) {
+      for (const key of ['delta', 'token', 'content', 'text', 'message']) {
         if (typeof record[key] === 'string') return record[key]
       }
       const choices = record.choices
@@ -91,9 +93,9 @@ export async function streamChat(
   onChunk: (chunk: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(endpoint('/api/chat'), {
+  const response = await fetch(endpoint('/api/chat/'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, text/plain' },
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, text/plain, application/json' },
     body: JSON.stringify({ message }),
     signal,
   })
@@ -101,9 +103,19 @@ export async function streamChat(
   if (!response.ok) throw await responseError(response)
   if (!response.body) throw new Error('The server returned an empty response stream.')
 
-  if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+  if (contentType.includes('text/event-stream')) {
     await consumeSse(response, onChunk, signal)
     return
+  }
+
+  if (contentType.includes('application/json')) {
+    const payload: unknown = await response.json()
+    if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string') {
+      onChunk(payload.message)
+      return
+    }
+    throw new Error('The server returned JSON without a string "message" field.')
   }
 
   const reader = response.body.getReader()
